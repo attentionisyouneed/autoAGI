@@ -2450,6 +2450,16 @@
             border-color: rgba(253, 230, 138, .5);
         }
 
+        /* 还没响起时轻轻呼吸，提示这里可以点开音乐 */
+        .bgm-toggle:not(.is-on) {
+            animation: bgmHint 3s ease-in-out infinite;
+        }
+
+        @keyframes bgmHint {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(253, 230, 138, 0); }
+            50% { box-shadow: 0 0 0 6px rgba(253, 230, 138, .1); }
+        }
+
         .bgm-toggle.is-on .bgm-icon {
             animation: bgmPulse 2.2s ease-in-out infinite;
         }
@@ -2528,7 +2538,7 @@
 <body>
 
     <!-- ===== 背景音乐（进入简历后自动播放，右下角可开关） ===== -->
-    <audio id="bgm" src="bgm.mp3" loop preload="metadata"></audio>
+    <audio id="bgm" src="bgm.mp3" loop preload="none"></audio>
     <button id="bgmToggle" class="bgm-toggle" type="button" aria-label="播放背景音乐" title="背景音乐开关">
         <span class="bgm-icon" aria-hidden="true">♪</span>
     </button>
@@ -3819,6 +3829,7 @@
                 if (!bgm || !btn) return;
 
                 var wantPlay = true;
+                var started = false;
 
                 function sync() {
                     var on = !bgm.paused && !bgm.ended;
@@ -3827,12 +3838,33 @@
                     btn.title = on ? '暂停背景音乐' : '播放背景音乐';
                 }
 
+                /* 只要音乐还没真正响起，就每次交互都再试一次（浏览器要求用户手势才允许出声） */
                 function tryPlay() {
-                    if (!wantPlay) return;
+                    if (!wantPlay || started) return;
                     var p = bgm.play();
-                    if (p && p.catch) p.catch(function () { /* 尚无可用的用户手势，等下一次交互 */ });
-                    sync();
+                    if (p && p.then) {
+                        p.then(function () {
+                            started = true;
+                            detach();
+                            sync();
+                        }).catch(function () {
+                            sync();   /* 还没有可用手势，等下一次交互继续尝试 */
+                        });
+                    } else {
+                        sync();
+                    }
                 }
+
+                function detach() {
+                    GESTURES.forEach(function (evt) {
+                        document.removeEventListener(evt, tryPlay);
+                    });
+                }
+
+                var GESTURES = ['pointerdown', 'touchstart', 'keydown', 'wheel', 'scroll'];
+                GESTURES.forEach(function (evt) {
+                    document.addEventListener(evt, tryPlay, { passive: true });
+                });
 
                 bgm.volume = 0.5;
                 bgm.addEventListener('play', sync);
@@ -3840,8 +3872,9 @@
 
                 btn.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    if (bgm.paused) {
+                    if (bgm.paused || bgm.ended) {
                         wantPlay = true;
+                        started = false;
                         tryPlay();
                     } else {
                         wantPlay = false;
@@ -3849,11 +3882,14 @@
                     }
                 });
 
-                /* 浏览器要求先有用户手势：任意首次点击 / 触摸 / 按键即起播（点九宫格也在其中） */
-                ['pointerdown', 'touchstart', 'keydown', 'wheel'].forEach(function (evt) {
-                    document.addEventListener(evt, function () {
-                        setTimeout(tryPlay, 120);
-                    }, { passive: true, once: true });
+                /* 首屏渲染完成后在后台悄悄缓冲音频，这样点击时能立刻出声而不是等下载 */
+                window.addEventListener('load', function () {
+                    setTimeout(function () {
+                        if (bgm.readyState < 3) {
+                            bgm.preload = 'auto';
+                            try { bgm.load(); } catch (err) { /* 忽略 */ }
+                        }
+                    }, 1200);
                 });
 
                 sync();
